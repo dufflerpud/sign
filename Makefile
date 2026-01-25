@@ -15,6 +15,15 @@ include $(PROJECTSDIR)/common/Makefile.std
 test:		$(RESDIR)/.must_exist
 		$(BINDIR)/* < tests/1 > $(RESDIR)/1
 
+install:
+		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/documents
+		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/signatures
+		$(MAKE) std_$@ ORIGINAL_TARGET=$@
+
+fresh:
+		$(GIT) pull
+		@make install
+
 %:
 		@echo "Invoking std_$@ rule:"
 		@$(MAKE) std_$@ ORIGINAL_TARGET=$@
