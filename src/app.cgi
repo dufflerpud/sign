@@ -343,7 +343,7 @@ sub func_docs_show
 	);
     my $directory = "$DOCUMENTS/$cpi_vars::USER";
     my @files;
-    &mkdirp( 0755, $directory );
+    &mkdirp( 0755, $directory, "$SIGNATURES/$cpi_vars::USER" );
     foreach my $files_in ( &files_in( $directory ) )
 	{
 	push( @files, $1 ) if( $files_in =~ /(.*)\.pre_signed.pdf$/ );
