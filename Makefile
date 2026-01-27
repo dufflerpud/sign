@@ -17,7 +17,7 @@ test:		$(RESDIR)/.must_exist
 
 install:
 		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/documents
-		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/signatures
+		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/keys
 		$(MAKE) std_$@ ORIGINAL_TARGET=$@
 
 fresh:
