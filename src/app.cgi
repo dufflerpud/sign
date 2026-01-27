@@ -431,7 +431,7 @@ sub func_docs_show
 		elsif( $ftype eq "signed" )
 		    {
 		    push( @toprint,
-			"<select name=digital_signature QonChange='",
+			"<select name=digital_signature onChange='",
 			( $base eq $NEW_DOCUMENT
 			    ? "(ebid(\"new_contents_id\")).click();"
 			    : "do_submit(\"func\",\"doc_sign\",\"what\",\"$base\");" ),
@@ -449,7 +449,7 @@ sub func_docs_show
 				"</option>\n" );
 			}
 		    push( @toprint, "</select>" );
-		    if( 1 || $ENV{HTTP_USER_AGENT}=~/Safari/
+		    if( $ENV{HTTP_USER_AGENT}=~/Safari/
 		     && $base eq $NEW_DOCUMENT )
 		        {
 			push( @toprint,
@@ -702,24 +702,30 @@ sub func_doc_signed
 	&echodo( @to_exec );
 	}
 
-    my %info =
-	(
-	name			=> $name,
-	user			=> $cpi_vars::USER." ("
-				.	&dbget($cpi_vars::ACCOUNTDB,
+    if( ! -r $signed )
+        { push(@msgs,
+	    "XL(Signature failure, probably due to passphrase mismatch.)"); }
+    else
+	{
+	my %info =
+	    (
+	    name		=> $name,
+	    user		=> $cpi_vars::USER." ("
+				    .	&dbget($cpi_vars::ACCOUNTDB,
 					"users",$cpi_vars::USER,"fullname")
-				. ")",
-	signed			=> $NOW,
-	digital_signature	=> $cpi_vars::FORM{digital_signature},
-	size			=> -s $signed,
-	agent			=> $ENV{HTTP_USER_AGENT},
-	remote_addr		=> $ENV{REMOTE_ADDR},
-	analog_location		=> join(",",$colpct,$rowpct),
-	cookie			=> $cookie
-	);
-    &write_file( $info_file,
-	Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
-    push( @msgs, "$unsigned uploaded");
+				    . ")",
+	    signed		=> $NOW,
+	    digital_signature	=> $cpi_vars::FORM{digital_signature},
+	    size		=> -s $signed,
+	    agent		=> $ENV{HTTP_USER_AGENT},
+	    remote_addr		=> $ENV{REMOTE_ADDR},
+	    analog_location	=> join(",",$colpct,$rowpct),
+	    cookie		=> $cookie
+	    );
+	&write_file( $info_file,
+	    Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
+	push( @msgs, "$unsigned uploaded");
+	}
     &func_docs_show(@msgs);
     }
 
@@ -906,7 +912,7 @@ sub func_doc_send
 		"<td valign=top>",$info{remote_addr},"</td></tr><tr>",
 		"<th valign=top align=left>XL(Size in bytes):</th>",
 		"<td valign=top>",$info{size},"</td></tr>" );
-        push( @msgs, "Signed '$info{name}' sent to $cpi_vars::FORM{destination}" );
+        push( @msgs, "XL(Signed) '$info{name}' XL(sent to) $cpi_vars::FORM{destination}" );
 	}
     else
         {
@@ -917,7 +923,7 @@ sub func_doc_send
 	        "<td valign=top>",&file_modified($to_send),"</td></tr>" );
 	push( @subject, "uploaded", $to_send,
 	    &time_string( $YMDHM, &file_modified($to_send) ) );
-        push( @msgs, "$to_send sent to $cpi_vars::FORM{destination}" );
+        push( @msgs, "$to_send XL(sent to) $cpi_vars::FORM{destination}" );
 	}
     push( @tbl, "</table></body></html>" );
     &sendmail( $cpi_vars::DAEMON_EMAIL,
@@ -1021,14 +1027,14 @@ sub func_key_upload
     &write_file( $tempname, $cpi_vars::FORM{new_contents} );
     my $contents_type = &read_file( "file - < '$tempname' |" );
     if( $contents_type !~ /PGP (.*) key/ || ! &inlist($1,@KEY_TYPES) )
-        { push( @msgs, "Cannot identify file contents." ); }
+        { push( @msgs, "XL(Cannot identify file contents.)" ); }
     else
 	{
 	my $new_name = "$basefile.$1.asc";
 	if( rename( $tempname, $new_name ) )
-	    { push( @msgs, "$new_name uploaded." ); }
+	    { push( @msgs, "$new_name XL(uploaded.)" ); }
 	else
-	    { push( @msgs, "Rename to $new_name failed, left as ${tempname}:  $!" ); }
+	    { push( @msgs, "XL(Rename to) $new_name XL(failed, left as) ${tempname}:  $!" ); }
 	}
     &func_keys_show(join("<br>",@msgs));
     }
