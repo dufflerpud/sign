@@ -73,7 +73,7 @@ package main;
 our $FORMNAME		= "form";
 $cpi_vars::CACHEDIR 	= "$cpi_vars::BASEDIR/cache";
 my $DOCUMENTS		= "$cpi_vars::BASEDIR/documents";
-my $SIGNATURES		= "$cpi_vars::BASEDIR/signatures";
+my $KEYS		= "$cpi_vars::BASEDIR/keys";
 our $PROG_URL		= $cpi_vars::BASES_URL."/index.cgi";
 $PROG_URL = $cpi_vars::BASES_URL."/index-test.cgi" if(($ENV{SCRIPT_NAME}||"") =~ /-test/);
 my $PROJECT		= $cpi_vars::PROG;
@@ -88,7 +88,9 @@ my $LIB_DIR		= $cpi_vars::BASEDIR."/lib";
 my $SIGNATURE_JS	= $LIB_DIR."/signature.js";
 my $SIGNATURE_HTML	= $LIB_DIR."/signature.html";
 my $CVT			= "/usr/local/bin/nene";
+my @KEY_TYPES		= ( "private", "public" );
 my $form_top;
+my $NEW_DOCUMENT	= "(New document)",
     
 my $DEFAULT_WINDOW_SEARCH_MAX = 40;
 
@@ -104,6 +106,16 @@ print STDERR "--- "
 print STDERR join("\n    ","Form:",
 	map { "$_=[$cpi_vars::FORM{$_}]" } sort keys %cpi_vars::FORM ), "\n"
 	if( %cpi_vars::FORM );
+
+#########################################################################
+#	Returns file modified string.					#
+#	Doing a stat() is ugly, but if this is ever not element 9 the	#
+#	world will seriously break.					#
+#########################################################################
+sub file_modified
+    {
+    return &time_string( $YMDHM, (stat($_[0]))[9] );
+    }
 
 #########################################################################
 #	Used by the common administrative functions.			#
@@ -135,7 +147,7 @@ EOF
     push( @toprint,
 	"><input type=button help='index' onClick='show_help(\"index.cgi\");' value='XL(Help)'" );
     foreach my $button (
-	( map {"${_}:XL($_)"} ("docs_show:Documents","sigs_show:Signatures")) )
+	( map {"${_}:XL($_)"} ("docs_show:Documents","keys_show:Digital keys")) )
         {
 	my( $butdest, $buttext ) = split(/:/,$button);
 	push( @toprint, "><input type=button onClick='do_submit(\"func\",\"$butdest\");'",
@@ -300,7 +312,7 @@ sub non_CGI_handler
 #########################################################################
 #	Return the top of the page.					#
 #########################################################################
-sub sign_page_top
+sub app_top
     {
     return <<EOF;
 </head><body $cpi_vars::BODY_TAGS>
@@ -337,17 +349,29 @@ sub func_docs_show
     my( @msgs ) = @_;
     my @toprint =
 	(
-	&sign_page_top(),
-	"<input type=hidden name=analog_signature>\n",
+	&app_top(),
 	"<input type=hidden name=what>\n",
+	"<input type=hidden name=new_name id=new_name_id>",
+	"<input type=file name=new_contents id=new_contents_id",
+	" onChange='(ebid(\"new_name_id\")).value=prompt(\"XL(Enter key name):\",this.value.replace(/.*\\\\/,\"\").replace(/\\..*/,\"\"));do_submit(\"func\",\"doc_upload_unsigned\");'",
+	" style='display:none'>\n"
 	);
     my $directory = "$DOCUMENTS/$cpi_vars::USER";
-    my @files;
-    &mkdirp( 0755, $directory, "$SIGNATURES/$cpi_vars::USER" );
+    &mkdirp( 0755, $directory, "$KEYS/$cpi_vars::USER" );
+    my %seen_file_base;
     foreach my $files_in ( &files_in( $directory ) )
 	{
-	push( @files, $1 ) if( $files_in =~ /(.*)\.pre_signed.pdf$/ );
+	$seen_file_base{$1}{2} = 1
+	    if( $files_in =~ /(.*)\.(unsigned|signed).pdf$/ );
 	}
+    my @files =
+        (
+	$NEW_DOCUMENT,
+	&numeric_sort(
+	    grep( ! $seen_file_base{$_}{signed}, keys %seen_file_base ) ),
+	&numeric_sort(
+	    grep(   $seen_file_base{$_}{signed}, keys %seen_file_base ) )
+	);
 
     push( @toprint, "<table border=1 style='border-collapse:collapse'>" );
 #    foreach my $k ( sort keys %cpi_vars::FORM )
@@ -360,8 +384,8 @@ sub func_docs_show
         push(@toprint,
 	    "<input type=hidden name=destination>",
 	    "<tr><th>XL(Document)</th>",
-		"<th>XL(Signed)</th>",
-		"<th>XL(Actions)</th></tr>\n");
+		"<th>XL(Unsigned)</th>",
+		"<th>XL(Signed)</th></tr>\n");
 	foreach my $base ( @files )
 	    {
 	    my $info_file="$directory/$base.info.po";
@@ -374,47 +398,74 @@ sub func_docs_show
 		    &time_string($YMDHM,$info{signed});
 		}
 	    push( @toprint, "<tr><th align=left>",
-		&filename_to_text($base), "</th><td>$signed_datetime</td><th>",
-		"<select onChange='",
-		"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base\",\"destination\",prompt(\"Send signed file to what address\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base\");}this.selectedIndex=0;'>",
-		"<option disabled selected>XL(Option)</option>");
-	    foreach my $buttext (
-		"doc_info:Information",
-		"doc_view:View",
-		"doc_download:Download",
-		"doc_send:Send e-mail",
-		"doc_del:Delete" )
-		{
-		my( $but, $text ) = split(/:/,$buttext);
-		push( @toprint,
-		    "<option value=\"$but\">XL($text)</option>\n" );
+		&filename_to_text($base), "</th>" );
+	    foreach my $ftype ( "unsigned", "signed" )
+	        {
+		push( @toprint, "<th>" );
+		my $fname = "$directory/$base.$ftype.pdf";
+		if( -r $fname )
+		    {
+		    my $modified = &file_modified($fname);
+		    push( @toprint,
+			"<select onChange='",
+			"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\",\"destination\",prompt(\"Send unsigned file to what address\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete $ftype) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\");}this.selectedIndex=0;'>",
+			"<option disabled selected>$modified</option>");
+		    foreach my $buttext (
+			"doc_info:Information",
+			"doc_view:View",
+			"doc_download:Download",
+			"doc_send:Send e-mail",
+			"doc_del:Delete" )
+			{
+			my( $but, $text ) = split(/:/,$buttext);
+			push( @toprint,
+			    "<option value=\"$but\">XL($text)</option>\n" );
+			}
+		    push( @toprint, "</select>" );
+		    }
+		elsif( $ftype eq "unsigned" )
+		    {
+		    push( @toprint, "<input type=button value='XL(Upload)'",
+		    	" onClick='(ebid(\"new_contents_id\")).click();'>" );
+		    }
+		elsif( $ftype eq "signed" )
+		    {
+		    push( @toprint,
+			"<select name=digital_signature QonChange='",
+			( $base eq $NEW_DOCUMENT
+			    ? "(ebid(\"new_contents_id\")).click();"
+			    : "do_submit(\"func\",\"doc_sign\",\"what\",\"$base\");" ),
+			"'>",
+			"<option disabled selected>",
+			( $base eq $NEW_DOCUMENT
+			    ? "XL(Upload and sign with key)"
+			    : "XL(Sign with key)" ),
+			"</option>" );
+		    foreach my $sigbase ( &files_in( "$KEYS/$cpi_vars::USER", ".*\\.private\\.asc" ) )
+			{
+			push( @toprint,
+				"<option value='$sigbase'>",
+				&filename_to_text($sigbase),
+				"</option>\n" );
+			}
+		    push( @toprint, "</select>" );
+		    if( 1 || $ENV{HTTP_USER_AGENT}=~/Safari/
+		     && $base eq $NEW_DOCUMENT )
+		        {
+			push( @toprint,
+			    "<input type=button value='XL(Upload)' onClick='",
+			    ( $base eq $NEW_DOCUMENT
+				? "(ebid(\"new_contents_id\")).click();"
+				: "do_submit(\"func\",\"doc_sign\",\"what\",\"$base\");" ),
+			    "'>");
+			}
+		    }
+		push( @toprint, "</th>" );
 		}
-	    push( @toprint, "</select></th></tr>" );
+	    push( @toprint, "</tr>" );
 	    }
 	}
-    push( @toprint, "<tr><th align=left>",
-	"<input type=text name=new_name help=new_name",
-	" placeholder='XL(Name of document to upload)'></th><td>",
-	"<select name=digital_signature",
-	#" onChange='(document.getElementById(\"new_file_id\")).focus();(document.getElementById(\"new_file_id\")).click();(document.getElementById(\"new_file_id\")).click();'",
-	"><option disabled selected>XL(Select signature)</option>\n");
-    foreach my $sigbase ( &files_in( "$SIGNATURES/$cpi_vars::USER", ".*\\.private\\.asc" ) )
-	{
-	push( @toprint,
-		"<option value='$sigbase'>",
-		&filename_to_text($sigbase),
-		"</option>\n" );
-	}
-    push( @toprint, "</select>" );
-    push( @toprint, "<br><input type=password name=passphrase",
-	" placeholder='XL(Passphrase)'>",
-        "</td><th>",
-	"<input type=file id=new_file_id name=new_file",
-	    #"onChange='do_submit(\"func\",\"doc_upload\");'>",
-	    " onChange='do_submit(\"func\",\"doc_upload\");'>",
-	#"<input type=button value='XL(Upload)'",
-	#" onClick='(document.getElementById(\"new_file_id\")).click();'>",
-	"</th></tr></table></form>\n");
+    push( @toprint,"</table></form>\n");
     &xprint( @toprint );
     &footer("docs_show");
     &cleanup(0);
@@ -487,28 +538,24 @@ sub rescale_and_draw
     }
 
 #########################################################################
-#	Incoming file.							#
+#	Setup for user to sign existing document.			#
 #########################################################################
-# " onChange='set_display(\"documents_id\",\"none\",\"signature_id\",\"\");setup_signature(\"$FORMNAME\",\"analog_signature\",\"doc_upload\");'>",
-sub func_doc_upload
+sub func_doc_sign
     {
-    my $name			= $cpi_vars::FORM{new_name};
-    my $relative_file		= $cpi_vars::USER."/".&text_to_filename($name);
-    my $base_file		= "$DOCUMENTS/$relative_file";
-    my $pre_signed		= "$base_file.pre_signed.pdf";
+    my $unsigned = "$DOCUMENTS/$cpi_vars::USER/$cpi_vars::FORM{what}.unsigned.pdf";
+    my $doc_as_jpg_b64 = &read_file("$CVT '$unsigned' -.jpeg|tee /usr/local/projects/sign/debug/foo.jpg |base64 -w 0 |");
 
-    &write_file( $pre_signed, $cpi_vars::FORM{new_file} );
-    my $doc_as_jpg_b64 = &read_file("$CVT '$pre_signed' -.jpeg|base64 -w 0 |");
-
-    #my @toprint = ( &sign_page_top() );
+    #my @toprint = ( &app_top() );
     &xprint(
 	&read_file( $SIGNATURE_JS ),
-	&sign_page_top(),
-	&template( $SIGNATURE_HTML, "%%DOCUMENT_JPG%%", $doc_as_jpg_b64 ),
+	&app_top(),
+	&template( $SIGNATURE_HTML,
+	    "%%DOCUMENT_JPG%%", $doc_as_jpg_b64,
+	    "%%PASSPHRASE_PLACEHOLDER%%",
+		"Passphrase for $cpi_vars::FORM{digital_signature} private key" ),
 	"<input type=hidden name=analog_signature>",
-	"<input type=hidden name=new_name value='$cpi_vars::FORM{new_name}'>",
+	"<input type=hidden name=what value='$cpi_vars::FORM{what}'>",
 	"<input type=hidden name=digital_signature value='$cpi_vars::FORM{digital_signature}'>",
-	"<input type=hidden name=passphrase value='$cpi_vars::FORM{passphrase}'>",
 	"</form>",
 	"<script>setup_signature('$FORMNAME','analog_signature','doc_signed' );</script>\n");
     &footer("docs_show");
@@ -518,17 +565,35 @@ sub func_doc_upload
 #########################################################################
 #	Incoming file.							#
 #########################################################################
+sub func_doc_upload_unsigned
+    {
+    my $name		= &text_to_filename($cpi_vars::FORM{new_name});
+    my $unsigned	= "$DOCUMENTS/$cpi_vars::USER/$name.unsigned.pdf";
+
+    &write_file( $unsigned, $cpi_vars::FORM{new_contents} );
+    if( ! $cpi_vars::FORM{digital_signature} )
+        { &func_docs_show("$unsigned uploaded."); }
+    else
+        {
+	$cpi_vars::FORM{what} = $name;
+	&func_doc_sign();
+	}
+    }
+
+#########################################################################
+#	Incoming file.							#
+#########################################################################
 sub func_doc_signed
     {
     my $SIGNATURE_COLS		= 200;
     my $SIGNATURE_ROWS		= 50;
-    my $name			= $cpi_vars::FORM{new_name};
+    my $name			= &text_to_filename($cpi_vars::FORM{what});
     my $relative_file		= $cpi_vars::USER."/".&text_to_filename($name);
     my $base_file		= "$DOCUMENTS/$relative_file";
-    my $pre_signed		= "$base_file.pre_signed.pdf";
-    my $post_signed		= "$base_file.post_signed.pdf";
+    my $unsigned		= "$base_file.unsigned.pdf";
+    my $signed			= "$base_file.signed.pdf";
     my $info_file		= "$base_file.info.po";
-    my $digital_file		= "$SIGNATURES/$cpi_vars::USER/$cpi_vars::FORM{digital_signature}";
+    my $digital_file		= "$KEYS/$cpi_vars::USER/$cpi_vars::FORM{digital_signature}";
     my $cookie;
 
     my @msgs;
@@ -560,7 +625,7 @@ sub func_doc_signed
 	{ type=>"pnm", file=>$qrcode_file } );
     my $qr_info = &media_info( $qrcode_file );
 
-    &echodo( "pdftoppm '$pre_signed' '$pre_qrcode_pages/X'" );
+    &echodo( "pdftoppm '$unsigned' '$pre_qrcode_pages/X'" );
     my @to_unite;
     my $page_start = 0;
     foreach my $pagename ( &numeric_sort(&files_in($pre_qrcode_pages)) )
@@ -618,7 +683,7 @@ sub func_doc_signed
 	my @cmd2 = ( @gpg_prefix,
 	    "--passphrase", &quotes( $cpi_vars::FORM{passphrase} ),
 	    "--pinentry-mode loopback -armor --clearsign",
-	    "--output", &quotes($post_signed),
+	    "--output", &quotes($signed),
 	    "--", &quotes($pre_digital_sign ) );
 	print STDERR "Executing [",join(" ",@cmd1),"]\n";
 	&echodo( @cmd1 );
@@ -630,7 +695,7 @@ sub func_doc_signed
 	my @to_exec = ( $pgp,
 	    "--armor --clearsign",
 	    "--keyfile",	&quotes($digital_file),
-	    "--output",	&quotes($post_signed),
+	    "--output",	&quotes($signed),
 	    "--password",	&quotes($cpi_vars::FORM{passphrase}),
 	    $pre_digital_sign );
 	print STDERR "About to execute [",join(" ",@to_exec),"]\n";
@@ -646,7 +711,7 @@ sub func_doc_signed
 				. ")",
 	signed			=> $NOW,
 	digital_signature	=> $cpi_vars::FORM{digital_signature},
-	size			=> -s $post_signed,
+	size			=> -s $signed,
 	agent			=> $ENV{HTTP_USER_AGENT},
 	remote_addr		=> $ENV{REMOTE_ADDR},
 	analog_location		=> join(",",$colpct,$rowpct),
@@ -654,7 +719,7 @@ sub func_doc_signed
 	);
     &write_file( $info_file,
 	Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
-    push( @msgs, "$pre_signed uploaded");
+    push( @msgs, "$unsigned uploaded");
     &func_docs_show(@msgs);
     }
 
@@ -665,35 +730,43 @@ sub info_table
     {
     my( $base_file ) = @_;
     my %info;
-    my $info_file = "$base_file.info.po";
-    &fatal("$info_file has been deleted.") if( ! -r $info_file );
-    eval( &read_file( $info_file ) );
-    my @toprint =
-	(
-	&sign_page_top(),
-	"<input type=hidden name=c value='$info{cookie}'>",
-        "<table style='border-collapse:collapse'>",
-	"<tr><th valign=top align=left>XL(Document name):</th>",
-	    "<td valign=top>",$info{name},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Signing user):</th>",
-	    "<td valign=top>",$info{user},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Signed):</th>",
-	    "<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
-#	    "<th valign=top align=left>XL(Location on document):</th>",
-#	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Digital signature):</th>",
-	    "<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Agent):</th>",
-	    "<td valign=top>",$info{agent},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Agent IP):</th>",
-	    "<td valign=top>",$info{remote_addr},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Size in bytes):</th>",
-	    "<td valign=top>",$info{size},"</td></tr><tr>",
-	    "<th valign=top colspan=2><input type=button",
-		" onClick='do_submit(\"func\",\"doc_viewanon\");'",
-		" value='XL(View document)'></th></tr>\n",
-	"</table></form>"
-	);
+    my @toprint = ( &app_top(), "<table style='border-collapse:collapse'>" );
+    my $info_file = $base_file;
+    $info_file =~ s/\.(unsigned|signed)\.*/.info.po/g;
+    if( ! -r $info_file )
+        {
+	push( @toprint,
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+		"<td>$base_file</td></tr>",
+	    "<tr><th valign=top align=left>XL(Uploaded):</th>",
+	        "<td>",&file_modified($base_file),"</td></tr>" );
+	}
+    else
+	{
+	eval( &read_file( $info_file ) );
+	push( @toprint,
+	    "<input type=hidden name=c value='",$info{cookie},"'>",
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+		"<td valign=top>",$info{name},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Signing user):</th>",
+		"<td valign=top>",$info{user},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Signed):</th>",
+		"<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
+    #	    "<th valign=top align=left>XL(Location on document):</th>",
+    #	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Digital signature):</th>",
+		"<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
+		"<th valign=top align=left>XL(Agent):</th>",
+		"<td valign=top>",$info{agent},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Agent IP):</th>",
+		"<td valign=top>",$info{remote_addr},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Size in bytes):</th>",
+		"<td valign=top>",$info{size},"</td></tr><tr>",
+		"<th valign=top colspan=2><input type=button",
+		    " onClick='do_submit(\"func\",\"doc_viewanon\");'",
+		    " value='XL(View signed document)'></th></tr>\n" );
+	}
+    push( @toprint, "</table></form>" );
     &xprint( @toprint );
     }
 
@@ -764,7 +837,7 @@ sub func_doc_viewanon
     {
     my $relative_file = &DBget("ck_$cpi_vars::FORM{c}");
     &fatal("Malformed cookie.") if( ! $relative_file );
-    my $to_view = join("/",$DOCUMENTS,$relative_file.".post_signed.pdf");
+    my $to_view = join("/",$DOCUMENTS,$relative_file.".pdf");
     my $base_file = $to_view;
     $base_file =~ s+.*/++;
     &view_pdf( $to_view, $base_file );
@@ -778,7 +851,7 @@ sub func_doc_viewanon
 #########################################################################
 sub func_doc_view
     {
-    my $base_file = $cpi_vars::FORM{what}.".post_signed.pdf";
+    my $base_file = $cpi_vars::FORM{what}.".pdf";
     my $to_view = join("/",$DOCUMENTS,$cpi_vars::USER,$base_file);
     &view_pdf( $to_view, $base_file );
     }
@@ -801,126 +874,190 @@ sub func_qr
 sub func_doc_send
     {
     my $base_file = join("/",$DOCUMENTS,$cpi_vars::USER,$cpi_vars::FORM{what});
-    my %info;
-    eval( &read_file( "$base_file.info.po" ) );
-    my $to_view = $base_file.".post_signed.pdf";
-    my @subject =
-	(
-	&dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname"),
-	"signed",
-	$info{name},
-	&time_string( $YMDHM, $info{signed} )
-	);
-    my @tbl =
-        ( "<html><body><table style='border-collapse:collapse'>",
-	"<tr><th valign=top align=left>XL(Document name):</th>",
-	    "<td valign=top>",$info{name},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Signing user):</th>",
-	    "<td valign=top>",$info{user},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Signed):</th>",
-	    "<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
-#	    "<th valign=top align=left>XL(Location on document):</th>",
-#	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Digital signature):</th>",
-	    "<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Agent):</th>",
-	    "<td valign=top>",$info{agent},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Agent IP):</th>",
-	    "<td valign=top>",$info{remote_addr},"</td></tr><tr>",
-	    "<th valign=top align=left>XL(Size in bytes):</th>",
-	    "<td valign=top>",$info{size},"</td></tr><tr>",
-	"</table></body></html>"
-	);
+    my $to_send = $base_file.".pdf";
+    my @subject = (&dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname") );
+    my @tbl = ( "<html><body><table style='border-collapse:collapse'>" );
+    my @msgs;
+    my $info_file = $base_file;
+    $info_file =~ s/\.(unsigned|signed)$/.info.po/;
+    if( -r $info_file )
+	{
+	my %info;
+	eval( &read_file( $info_file ) );
+	push( @subject,
+	    "signed",
+	    $info{name},
+	    &time_string( $YMDHM, $info{signed} )
+	    );
+	push( @tbl,
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+		"<td valign=top>",$info{name},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Signing user):</th>",
+		"<td valign=top>",$info{user},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Signed):</th>",
+		"<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
+    #	    "<th valign=top align=left>XL(Location on document):</th>",
+    #	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Digital signature):</th>",
+		"<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
+		"<th valign=top align=left>XL(Agent):</th>",
+		"<td valign=top>",$info{agent},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Agent IP):</th>",
+		"<td valign=top>",$info{remote_addr},"</td></tr><tr>",
+		"<th valign=top align=left>XL(Size in bytes):</th>",
+		"<td valign=top>",$info{size},"</td></tr>" );
+        push( @msgs, "Signed '$info{name}' sent to $cpi_vars::FORM{destination}" );
+	}
+    else
+        {
+	push( @tbl,
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+	        "<td valign=top>",$base_file,"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Uploaded):</th>",
+	        "<td valign=top>",&file_modified($to_send),"</td></tr>" );
+	push( @subject, "uploaded", $to_send,
+	    &time_string( $YMDHM, &file_modified($to_send) ) );
+        push( @msgs, "$to_send sent to $cpi_vars::FORM{destination}" );
+	}
+    push( @tbl, "</table></body></html>" );
     &sendmail( $cpi_vars::DAEMON_EMAIL,
 	$cpi_vars::FORM{destination},
 	join(" ",@subject),
 	&xlate(join("\n",@tbl)),
-	"$base_file.post_signed.pdf" );
-	#&read_file( "$base_file.post_signed.pdf" ) );
-    &func_docs_show( "Signed '$info{name}' sent to $cpi_vars::FORM{destination}" );
+	$to_send );
+    &func_docs_show( @msgs );
     }
 
 #########################################################################
 #	Show all the signatures.					#
 #########################################################################
-sub func_sigs_show
+sub func_keys_show
     {
     my( @msgs ) = @_;
-    my( @toprint ) = &sign_page_top();
-    my $directory = "$SIGNATURES/$cpi_vars::USER";
-    my @files;
+    my( @toprint ) = &app_top();
+    my $directory = "$KEYS/$cpi_vars::USER";
+    my %seen_file_base;
+    my $columns = scalar(@KEY_TYPES) + 1;
     &mkdirp( 0755, $directory );
-    foreach my $files_in ( &files_in( $directory ) )
+    foreach my $fname ( &files_in( $directory ) )
 	{
-	push( @files, $1 ) if( $files_in =~ /(.*)\.private.asc$/ );
+	$seen_file_base{$1}{$2}=1 if( $fname =~ /(.*)\.(private|public).asc$/ );
 	}
+    my @files = sort keys %seen_file_base;
 
-    push( @toprint, "<table border=1 style='border-collapse:collapse'>" );
+    push( @toprint,
+	"<input type=hidden name=what>",
+        "<table border=1 style='border-collapse:collapse'>" );
 #    foreach my $k ( sort keys %cpi_vars::FORM )
 #	{ push( @toprint, "<tr><th align=left>$k</th><td>$cpi_vars::FORM{$k}</td></tr>\n" ); }
-    push( @toprint, &messages(1,@msgs) );
+    push( @toprint, &messages($columns,@msgs) );
     if( ! @files )
 	{ push( @toprint, "<tr><th>No signatures found</th></tr>\n" ); }
     else
 	{
-        push(@toprint,"<tr><th>XL(Signature)</th><th>XL(Actions)</th></tr>\n");
+        push(@toprint,"<tr><th>XL(Key name)</th>");
+	foreach my $ktype ( @KEY_TYPES )
+	    {
+	    push( @toprint, "<th>XL(".ucfirst($ktype)." key)</th>");
+	    }
+	push( @toprint, "</tr>\n" );
 	foreach my $base ( @files )
 	    {
 	    push( @toprint, "<tr><th align=left>",
-		&filename_to_text($base), "</th><th>",
-		"<select onChange='",
-		"if(this.value!=\"sig_del\"||confirm(\"XL(Are you sure you want to delete) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base\");}this.selectedIndex=0;'>",
-		"<option disabled selected>XL(Option)</option>");
-	    foreach my $buttext (
-		"sig_info:Information",
-		"sig_del:Delete" )
-		{
-		my( $but, $text ) = split(/:/,$buttext);
-		push( @toprint,
-		    "<option value=\"$but\">XL($text)</option>\n" );
+		&filename_to_text($base), "</th>" );
+	    foreach my $ktype ( @KEY_TYPES )
+	        {
+		push( @toprint,"<th>");
+		if( ! $seen_file_base{$base}{$ktype} )
+		    { push( @toprint, "XL(No $ktype key)" ); }
+		else
+		    {
+		    push( @toprint,
+			"<select onChange='",
+			"if(this.value!=\"key_del\"||confirm(\"XL(Are you sure you want to delete the $ktype key for) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ktype\");}this.selectedIndex=0;'>",
+			"<option disabled selected>XL(Option)</option>");
+		    foreach my $buttext (
+			"key_info:Information",
+			"key_del:Delete" )
+			{
+			my( $but, $text ) = split(/:/,$buttext);
+			push( @toprint,
+			    "<option value=\"$but\">XL($text)</option>\n" );
+			}
+		    push( @toprint, "</select>" );
+		    }
+		push( @toprint, "</th>" );
 		}
-	    push( @toprint, "</select></th></tr>" );
+	    push( @toprint, "</tr>" );
 	    }
 	}
-    push( @toprint, "<tr><th align=left>",
-	"<input type=file id=new_file_id name=new_file style='display:none'",
-	    "onChange='do_submit(\"func\",\"sig_upload\");'>",
-	"<input type=text name=new_name help=new_name",
-	" placeholder='XL(Name of signature to upload)'></th><th>",
-	"<input type=button value='XL(Upload)'",
-	" onClick='(document.getElementById(\"new_file_id\")).click();'>");
-    push( @toprint, "</th></table></form>" );
+    push( @toprint, "<tr><th colspan=$columns>",
+	"<input type=hidden name=new_name id=new_name_id style='display:none'>",
+	"<input type=file name=new_contents id=new_contents_id style='display:none'",
+	" onChange='(ebid(\"new_name_id\")).value=prompt(\"XL(Enter key name):\",this.value.replace(/.*\\\\/,\"\").replace(/\\..*/,\"\"));do_submit(\"func\",\"key_upload\");'>",
+	"<input type=button value='XL(Upload private or public key)'",
+	" onClick='(ebid(\"new_contents_id\")).click();'>",
+	"</table></form>" );
     &xprint( @toprint );
-    &footer("sigs_show");
+    &footer("keys_show");
     &cleanup(0);
     }
 
 #########################################################################
 #	Incoming file.							#
 #########################################################################
-sub func_sig_upload
+sub func_key_upload
     {
     my( $name ) = $cpi_vars::FORM{new_name};
-    my $directory = "$SIGNATURES/$cpi_vars::USER";
+    my $directory = "$KEYS/$cpi_vars::USER";
     &mkdirp( $directory );
     my $basefile = "$directory/".&text_to_filename($name);
     my @msgs;
 
-    &write_file( "$basefile.private.key", $cpi_vars::FORM{private_key} );
-    push( @msgs, "$basefile.private.key uploaded." );
-    &write_file( "$basefile.public.key", $cpi_vars::FORM{public_key} );
-    push( @msgs, "$basefile.public.key uploaded." );
-    &func_sigs_show(join("<br>",@msgs));
+    my $tempname = "$basefile.$$";	# Do not use tempfile as it
+    					# could leave file on a different
+					# filesystem which would cause
+					# subsequent rename() to fail.
+    &write_file( $tempname, $cpi_vars::FORM{new_contents} );
+    my $contents_type = &read_file( "file - < '$tempname' |" );
+    if( $contents_type !~ /PGP (.*) key/ || ! &inlist($1,@KEY_TYPES) )
+        { push( @msgs, "Cannot identify file contents." ); }
+    else
+	{
+	my $new_name = "$basefile.$1.asc";
+	if( rename( $tempname, $new_name ) )
+	    { push( @msgs, "$new_name uploaded." ); }
+	else
+	    { push( @msgs, "Rename to $new_name failed, left as ${tempname}:  $!" ); }
+	}
+    &func_keys_show(join("<br>",@msgs));
+    }
+
+#########################################################################
+#	Show information about a signature file				#
+#########################################################################
+sub func_key_info
+    {
+    my $base_file = join("/",$KEYS,$cpi_vars::USER,$cpi_vars::FORM{what}).".asc";
+    &fatal("$base_file does not exist.") if( ! -r $base_file );
+    &xprint(
+	&app_top(),
+	"<table><tr><td><pre>",
+	&read_file( $base_file ),
+	"</pre></td></tr></table>",
+	"</form>" );
+    &footer("keys_show");
+    &cleanup(0);
     }
 
 #########################################################################
 #	Delete signatures.						#
 #########################################################################
-sub func_sig_del
+sub func_key_del
     {
-    &func_sigs_show(
+    &func_keys_show(
 	&delete_base(
-	    join("/",$SIGNATURES,$cpi_vars::USER,$cpi_vars::FORM{what})));
+	    join("/",$KEYS,$cpi_vars::USER,$cpi_vars::FORM{what})));
     }
 
 #########################################################################
@@ -930,7 +1067,7 @@ sub CGI_handler
     {
     #print "Content-type:  text/html\n\nFORM=$cpi_vars::FORM{USER} USER=$cpi_vars::USER.<br>";
     $cpi_vars::USER ||= "anonymous";
-    $form_top = &sign_page_top();
+    $form_top = &app_top();
     $cpi_vars::FORM{func} ||= "docs_show";
     $cpi_vars::FORM{func} = "docs_show" if($cpi_vars::FORM{func} eq "dologin");
     if( exists &{"func_$cpi_vars::FORM{func}"} )
