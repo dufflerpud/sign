@@ -570,7 +570,14 @@ sub func_doc_upload_unsigned
     my $name		= &text_to_filename($cpi_vars::FORM{new_name});
     my $unsigned	= "$DOCUMENTS/$cpi_vars::USER/$name.unsigned.pdf";
 
-    &write_file( $unsigned, $cpi_vars::FORM{new_contents} );
+    if( $cpi_vars::FORM{new_contents} =~ /^%PDF/ )
+	{ &write_file( $unsigned, $cpi_vars::FORM{new_contents} ); }
+    else
+        {
+	my $uploading = &tempfile(".unknown");
+	&write_file( $uploading, $cpi_vars::FORM{new_contents} );
+	&echodo("$CVT '$unsigned' < '$uploading'");
+	}
     if( ! $cpi_vars::FORM{digital_signature} )
         { &func_docs_show("$unsigned uploaded."); }
     else
@@ -1014,27 +1021,24 @@ sub func_keys_show
 #########################################################################
 sub func_key_upload
     {
-    my( $name ) = $cpi_vars::FORM{new_name};
+    my( $name ) = &text_to_filename($cpi_vars::FORM{new_name});
     my $directory = "$KEYS/$cpi_vars::USER";
-    &mkdirp( $directory );
-    my $basefile = "$directory/".&text_to_filename($name);
     my @msgs;
 
-    my $tempname = "$basefile.$$";	# Do not use tempfile as it
-    					# could leave file on a different
-					# filesystem which would cause
-					# subsequent rename() to fail.
-    &write_file( $tempname, $cpi_vars::FORM{new_contents} );
-    my $contents_type = &read_file( "file - < '$tempname' |" );
-    if( $contents_type !~ /PGP (.*) key/ || ! &inlist($1,@KEY_TYPES) )
-        { push( @msgs, "XL(Cannot identify file contents.)" ); }
+    my $ktype =
+        ( $cpi_vars::FORM{new_contents} =~ /BEGIN PGP PRIVATE KEY BLOCK/
+	? "private"
+        : $cpi_vars::FORM{new_contents} =~ /BEGIN PGP PUBLIC KEY BLOCK/
+	? "public"
+	: "unknown" );
+    if( $ktype eq "unknown" )
+        { push( @msgs, "XL(Cannot identify file contents for) \"$name\"." ); }
     else
-	{
-	my $new_name = "$basefile.$1.asc";
-	if( rename( $tempname, $new_name ) )
-	    { push( @msgs, "$new_name XL(uploaded.)" ); }
-	else
-	    { push( @msgs, "XL(Rename to) $new_name XL(failed, left as) ${tempname}:  $!" ); }
+        {
+	&mkdirp( $directory );
+	&write_file( "$directory/$name.$ktype.asc",
+	    $cpi_vars::FORM{new_contents} );
+	push( @msgs, "\"$name\" XL(uploaded as a $ktype key.)" );
 	}
     &func_keys_show(join("<br>",@msgs));
     }
