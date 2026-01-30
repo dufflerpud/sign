@@ -37,7 +37,7 @@ use cpi_hash qw(hashof);
 use cpi_setup qw(setup);
 use cpi_help qw(help_strings);
 use cpi_db qw( DBread DBwrite DBpop DBget DBput DBdelkey DBadd DBdel DBnewkey
- dbget );
+ dbget dbread );
 use cpi_file qw(cleanup fatal files_in fqfiles_in read_file read_lines
  tempfile write_file echodo mkdirp first_in_path );
 use cpi_time qw(time_string);
@@ -95,6 +95,8 @@ my $NEW_DOCUMENT	= "(New document)",
 my $DEFAULT_WINDOW_SEARCH_MAX = 40;
 
 my $NOW = time();
+
+my @problems;
 
 #########################################################################
 #	Variable declarations.						#
@@ -167,122 +169,53 @@ EOF
     }
 
 #########################################################################
-#	Update a record if there is new information.			#
+#	File to sign supplied on command line.  Put it in the user's	#
+#	directory and then notify them.					#
 #########################################################################
-sub update_record
+sub handoff
     {
-    my( $tbl, $ind ) = @_;
-    &DBwrite();
-    &DBadd( $tbl, $ind );
-    print STDERR "update_record($tbl,$ind)\n";
-    &DBpop();
-    }
-
-#########################################################################
-#	Create a unique key, but leave some clues as to what type of	#
-#	table it goes to.						#
-#########################################################################
-sub new_tagged_key
-    {
-    my( $tbl ) = @_;
-    my $ret = substr($tbl,0,1) . "_" . &DBnewkey();
-    #&xprint( "Creating new $tbl key:  $ret<br>\n" );
-    my $checkname = &DBget($ret,"Name");
-    &autopsy(
-	"new_tagged_key($tbl) created $ret which already exists ($checkname)")
-	if( $checkname );
-    return $ret;
-    }
-
-#########################################################################
-#	Generate a quasi-difficult to guess id.  Could be much more	#
-#	difficult.  No requirement for it to be unique.			#
-#########################################################################
-sub secret_id
-    {
-    return &cpi_compress_integer::compress_integer($NOW);
-    }
-
-#########################################################################
-#	Takes either an html file or html text, uses an external	#
-#	utility to convert it to pdf.  Basically no error checking.	#
-#########################################################################
-sub html_to_pdf
-    {
-    my( $html_contents ) = @_;
-    my $html_file;
-    my @to_remove;
-    if( $html_contents !~ /</ )		# Nobody will embed a < in a filename
-        { $html_file = $html_contents; }
+    if( scalar(@_) != 2 )
+        { &fatal("Incorrect number of arguments for 'handoff'."); }
     else
 	{
-	$html_file = &tempfile(".html");
-	&write_file( $html_file, $html_contents );
-	}
-    my $ret = &read_file(
-	"$WKHTMLTOPDF --print-media-type $html_file - 2>/dev/null |" );
-    }
-
-#########################################################################
-#	Convert a number from a base 
-#########################################################################
-my @dig_list;		# Set in decode_progress
-my %dig_map;
-my $dig_radix;
-sub convert_base
-    {
-    my ( @digs ) = split(//,$_[0]);
-    my $n = 0;
-    my $d;
-    #print "dig_list=[",join(",",@dig_list),"]<br>\n";
-    while( defined($d = shift(@digs)) )
-	{
-	#print "d($d) maps to [",$dig_map{$d},"].<br>\n";
-	$n = $n*$dig_radix + $dig_map{$d};
-	}
-    #print "convert_base($_[0]) returns [$res]<br>\n";
-    return $n;
-    }
-
-#########################################################################
-#	Figure out what directories need to be made to create file.	#
-#	If you have the contents, go ahead and just do it.		#
-#########################################################################
-sub setup_file
-    {
-    my ( $outarg, @contents ) = @_;
-    my( $openfnc, $fn ) =
-        ( $outarg=~/^([>]+)\s*(.*?)$/
-	? ( $1, $2 )
-	: ( ">", $outarg ) );
-    my( @pieces ) = split(/\//,$fn);
-    pop( @pieces );
-    push( @pieces, "." ) if( ! @pieces );
-    my $dirname = join("/",@pieces);
-    #return undef if( ! -d $dirname && ! system("mkdir -p '$dirname'") );
-    #system("mkdir -p '$dirname'") if( ! -d $dirname );
-    &mkdirp( 0775, $dirname ) if( ! -d $dirname );
-    open( OUT, "$openfnc $fn" ) 
-        || &autopsy("Cannot $openfnc to ${fn}:  $!");
-    binmode OUT;		# Avoid "Wide character in print" error messages
-    if( @contents )
-        {
-	print OUT @contents;
-	close( OUT );
-	}
-    return $fn;
-    }
-
-#########################################################################
-#	Check if administrator wants updating windows to stop.		#
-#########################################################################
-sub stop_updates_if_needed
-    {
-    if( my $reason = &read_file($EXIT_FILE,"") )
-	{
-	$reason =~ s/\n/\\n/g;
-	print "<script>\nalert('$reason');\nparent.window.close();\n</script>\n";
-	&cleanup( 0 );
+	my( $destination_user, $file_to_sign ) = @_;
+	&dbread( $cpi_vars::ACCOUNTDB );
+	#my $group = "${cpi_vars::PROG}_user";
+	my $group = "sign_user";
+	push( @problems, "$destination_user is not in group \"$group\"." )
+	    if( ! &in_group( $destination_user, $group ) );
+	my $email = &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "email" );
+	push( @problems, "$destination_user does not have confirmed e-mail address." )
+	    if( ! $email
+	     || ! &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "confirmemail" ) );
+	push( @problems, "$file_to_sign is not readable." )
+	    if( ! -r $file_to_sign );
+	&fatal(@problems) if( @problems );
+	my $docname = $file_to_sign;
+	$docname =~ s+.*/++;
+	$docname =~ s/\.[^\.]*$//;
+	my $destname = "$DOCUMENTS/$destination_user/$docname.unsigned.pdf";
+	my $doctextname = &filename_to_text($docname);
+	&fatal("$destname already exists.") if( -e $destname );
+	if( $file_to_sign =~ /\.pdf$/ )
+	    { &echodo("cp '$file_to_sign' '$destname'"); }
+	else
+	    { &echodo("$CVT -v1 '$file_to_sign' '$destname'"); }
+	&fatal("Could not make $destname from $file_to_sign.")
+	    if( ! -s $destname );
+	$cpi_vars::USER ||= $ENV{LOGNAME};
+	$cpi_vars::URL ||= "https://www.$cpi_vars::DOMAIN$cpi_vars::OFFSET/$cpi_vars::PROG";
+	my $subject =
+	    "\"$doctextname\" received from "
+	    . &dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname")
+	    . " for signature.";
+	print "E-mail from $cpi_vars::DAEMON_EMAIL to [$email]:  $subject\n";
+	&sendmail( $cpi_vars::DAEMON_EMAIL,
+	    $email,
+	    $subject,
+	    "<html><head></head><body><h2>Click <a href='$cpi_vars::URL'>here</a> to sign \"$doctextname\" document.</h2></body></html>",
+	    $destname );
+	&cleanup(0);
 	}
     }
 
@@ -291,15 +224,9 @@ sub stop_updates_if_needed
 #########################################################################
 sub non_CGI_handler
     {
-    my @problems;
     if( ! defined($ARGV[0]) )
 	{ push(@problems,"No arguments specified."); }
-    elsif( $ARGV[0] eq "route" )	{ &do_one_route( @ARGV[1..3] );	}
-    elsif( $ARGV[0] eq "reindex" )	{ reindex( $ARGV[1] );		}
-    elsif( $ARGV[0] eq "print" )	{ dump_indices();		}
-    elsif( $ARGV[0] eq "sanity" )	{ sanity();			}
-    elsif( $ARGV[0] eq "trip" )		{ &trip_update();		}
-    elsif( $ARGV[0] eq "pomap" )	{ &pomap( @ARGV[1..$#ARGV] );	}
+    elsif( $ARGV[0] eq "handoff" )	{ &handoff( @ARGV[1..$#ARGV] );	}
     elsif( $ARGV[0] eq "export" )	{ &export_all( $ARGV[1]);	}
     elsif( $ARGV[0] eq "import" )	{ &import_all( $ARGV[1]);	}
     else
@@ -408,7 +335,7 @@ sub func_docs_show
 		    my $modified = &file_modified($fname);
 		    push( @toprint,
 			"<select onChange='",
-			"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\",\"destination\",prompt(\"Send unsigned file to what address\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete $ftype) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\");}this.selectedIndex=0;'>",
+			"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\",\"destination\",prompt(\"XL(Send file to what address?)\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete $ftype) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\");}this.selectedIndex=0;'>",
 			"<option disabled selected>$modified</option>");
 		    foreach my $buttext (
 			"doc_info:Information",
@@ -438,17 +365,18 @@ sub func_docs_show
 			"'>",
 			"<option disabled selected>",
 			( $base eq $NEW_DOCUMENT
-			    ? "XL(Upload and sign with key)"
-			    : "XL(Sign with key)" ),
+			    ? "XL(Upload and sign)"
+			    : "XL(Sign)" ),
 			"</option>" );
 		    foreach my $sigbase ( &files_in( "$KEYS/$cpi_vars::USER", ".*\\.private\\.asc" ) )
 			{
+			my $text = &filename_to_text($sigbase);
+			$text =~ s/\.private$//;
 			push( @toprint,
-				"<option value='$sigbase'>",
-				&filename_to_text($sigbase),
-				"</option>\n" );
+			    "<option value='$sigbase'>$text</option>\n" );
 			}
-		    push( @toprint, "</select>" );
+		    push( @toprint, "<option value=none>No digital signature</option>",
+			"</select>" );
 		    if( $ENV{HTTP_USER_AGENT}=~/Safari/
 		     && $base eq $NEW_DOCUMENT )
 		        {
@@ -600,7 +528,6 @@ sub func_doc_signed
     my $unsigned		= "$base_file.unsigned.pdf";
     my $signed			= "$base_file.signed.pdf";
     my $info_file		= "$base_file.info.po";
-    my $digital_file		= "$KEYS/$cpi_vars::USER/$cpi_vars::FORM{digital_signature}";
     my $cookie;
 
     my @msgs;
@@ -675,38 +602,44 @@ sub func_doc_signed
     my $pre_digital_sign = &tempfile(".pdf");
     &echodo("pdfunite", &quotes( @to_unite, $pre_digital_sign ) );
 
-    my $pgp = &first_in_path("pgp","rnp","gpg");
-    if( $pgp =~ /gpg/ )
-        {
-	my $pgp_homedir = &tempfile(".pgp_homedir");
-	&mkdirp( 0700, $pgp_homedir );
-	my @gpg_prefix =
-	    (
-	    $pgp,
-	    "--quiet --lock-never --batch",
-	    "--homedir", $pgp_homedir
-	    );
-	my @cmd1 = ( @gpg_prefix, "--import", &quotes($digital_file) );
-	my @cmd2 = ( @gpg_prefix,
-	    "--passphrase", &quotes( $cpi_vars::FORM{passphrase} ),
-	    "--pinentry-mode loopback -armor --clearsign",
-	    "--output", &quotes($signed),
-	    "--", &quotes($pre_digital_sign ) );
-	print STDERR "Executing [",join(" ",@cmd1),"]\n";
-	&echodo( @cmd1 );
-	print STDERR "Executing [",join(" ",@cmd2),"]\n";
-	&echodo( @cmd2 );
-	}
+    if( $cpi_vars::FORM{digital_signature} eq "none" )
+        { &echodo( &quotes("cp",$pre_digital_sign,$signed) ); }
     else
 	{
-	my @to_exec = ( $pgp,
-	    "--armor --clearsign",
-	    "--keyfile",	&quotes($digital_file),
-	    "--output",	&quotes($signed),
-	    "--password",	&quotes($cpi_vars::FORM{passphrase}),
-	    $pre_digital_sign );
-	print STDERR "About to execute [",join(" ",@to_exec),"]\n";
-	&echodo( @to_exec );
+	my $digital_file = "$KEYS/$cpi_vars::USER/$cpi_vars::FORM{digital_signature}";
+	my $pgp = &first_in_path("pgp","rnp","gpg");
+	if( $pgp =~ /gpg/ )
+	    {
+	    my $pgp_homedir = &tempfile(".pgp_homedir");
+	    &mkdirp( 0700, $pgp_homedir );
+	    my @gpg_prefix =
+		(
+		$pgp,
+		"--quiet --lock-never --batch",
+		"--homedir", $pgp_homedir
+		);
+	    my @cmd1 = ( @gpg_prefix, "--import", &quotes($digital_file) );
+	    my @cmd2 = ( @gpg_prefix,
+		"--passphrase", &quotes( $cpi_vars::FORM{passphrase} ),
+		"--pinentry-mode loopback -armor --clearsign",
+		"--output", &quotes($signed),
+		"--", &quotes($pre_digital_sign ) );
+	    print STDERR "Executing [",join(" ",@cmd1),"]\n";
+	    &echodo( @cmd1 );
+	    print STDERR "Executing [",join(" ",@cmd2),"]\n";
+	    &echodo( @cmd2 );
+	    }
+	else
+	    {
+	    my @to_exec = ( $pgp,
+		"--armor --clearsign",
+		"--keyfile",	&quotes($digital_file),
+		"--output",	&quotes($signed),
+		"--password",	&quotes($cpi_vars::FORM{passphrase}),
+		$pre_digital_sign );
+	    print STDERR "About to execute [",join(" ",@to_exec),"]\n";
+	    &echodo( @to_exec );
+	    }
 	}
 
     if( ! -r $signed )
@@ -737,50 +670,76 @@ sub func_doc_signed
     }
 
 #########################################################################
+#	Generate a string containing a table of info about the file	#
+#	which may be presented directly to the user or e-mailed to him.	#
+#########################################################################
+sub gen_info_table
+    {
+    my( $base_file ) = @_;
+    $base_file =~ s/\.(pdf|po)$//;
+    $base_file =~ s/\.(unsigned|signed|info)$//;
+    my %fnames =
+        (
+	unsigned	=>	$base_file.".unsigned.pdf",
+	signed		=>	$base_file.".signed.pdf",
+	info		=>	$base_file.".info.po"
+	);
+    my @toprint = ( "<table style='border-collapse:collapse'>" );
+
+    if( ! -r $fnames{info} )
+        {
+	push( @toprint,
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+		"<td>$fnames{unsigned}</td></tr>",
+	    "<tr><th valign=top align=left>XL(Uploaded):</th>",
+	        "<td>",&file_modified($fnames{unsigned}),"</td></tr>" );
+	}
+    else
+	{
+        my %info;
+	eval( &read_file( $fnames{info} ) );
+	my $kuser = $info{user};
+	$kuser =~ s/ .*//;
+	my $kbase = $info{digital_signature};
+	$kbase =~ s/\.private\.asc//;
+	my $public_key = join("/",
+	    $KEYS, $kuser, $kbase.".public.asc" );
+	push( @toprint,
+	    "<input type=hidden name=c value='",$info{cookie},"'>",
+	    "<tr><th valign=top align=left>XL(Document name):</th>",
+		"<td valign=top>",$info{name},"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Signing user):</th>",
+		"<td valign=top>",$info{user},"</td></tr><tr>",
+	    "<tr><th valign=top align=left>XL(Signed):</th>",
+		"<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr>",
+	    "<tr><th valign=top align=left>XL(Agent):</th>",
+		"<td valign=top>",$info{agent},"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Agent IP):</th>",
+		"<td valign=top>",$info{remote_addr},"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Size in bytes):</th>",
+		"<td valign=top>",$info{size},"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Digital signature):</th>",
+		"<td valign=top>",&filename_to_text($kbase),"<br>",
+		( ! -r $public_key
+		? "XL(Public key unavailable here)"
+		: ("<pre>", &read_file($public_key), "</pre>" )), "</td></tr>");
+	push( @toprint,
+	    "<tr><th valign=top colspan=2><input type=button",
+		" onClick='do_submit(\"func\",\"doc_viewanon\");'",
+		" value='XL(View signed document)'></th></tr>\n" )
+	    if( $cpi_vars::FORM{c} );
+	}
+    push( @toprint, "</table>" );
+    return join("",@toprint);
+    }
+
+#########################################################################
 #	Dump an info file.						#
 #########################################################################
 sub info_table
     {
     my( $base_file ) = @_;
-    my %info;
-    my @toprint = ( &app_top(), "<table style='border-collapse:collapse'>" );
-    my $info_file = $base_file;
-    $info_file =~ s/\.(unsigned|signed)\.*/.info.po/g;
-    if( ! -r $info_file )
-        {
-	push( @toprint,
-	    "<tr><th valign=top align=left>XL(Document name):</th>",
-		"<td>$base_file</td></tr>",
-	    "<tr><th valign=top align=left>XL(Uploaded):</th>",
-	        "<td>",&file_modified($base_file),"</td></tr>" );
-	}
-    else
-	{
-	eval( &read_file( $info_file ) );
-	push( @toprint,
-	    "<input type=hidden name=c value='",$info{cookie},"'>",
-	    "<tr><th valign=top align=left>XL(Document name):</th>",
-		"<td valign=top>",$info{name},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Signing user):</th>",
-		"<td valign=top>",$info{user},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Signed):</th>",
-		"<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
-    #	    "<th valign=top align=left>XL(Location on document):</th>",
-    #	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Digital signature):</th>",
-		"<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
-		"<th valign=top align=left>XL(Agent):</th>",
-		"<td valign=top>",$info{agent},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Agent IP):</th>",
-		"<td valign=top>",$info{remote_addr},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Size in bytes):</th>",
-		"<td valign=top>",$info{size},"</td></tr><tr>",
-		"<th valign=top colspan=2><input type=button",
-		    " onClick='do_submit(\"func\",\"doc_viewanon\");'",
-		    " value='XL(View signed document)'></th></tr>\n" );
-	}
-    push( @toprint, "</table></form>" );
-    &xprint( @toprint );
+    &xprint( &app_top(), &gen_info_table(@_), "</form>" );
     }
 
 #########################################################################
@@ -850,7 +809,7 @@ sub func_doc_viewanon
     {
     my $relative_file = &DBget("ck_$cpi_vars::FORM{c}");
     &fatal("Malformed cookie.") if( ! $relative_file );
-    my $to_view = join("/",$DOCUMENTS,$relative_file.".pdf");
+    my $to_view = join("/",$DOCUMENTS,$relative_file.".signed.pdf");
     my $base_file = $to_view;
     $base_file =~ s+.*/++;
     &view_pdf( $to_view, $base_file );
@@ -877,7 +836,7 @@ sub func_qr
     {
     my $relative_file = &DBget("ck_$cpi_vars::FORM{c}");
     &fatal("Malformed QR code.") if( ! $relative_file );
-    &info_table("$DOCUMENTS/$relative_file");
+    &xprint( &app_top(), &gen_info_table("$DOCUMENTS/$relative_file") );
     &cleanup(0);
     }
 
@@ -889,7 +848,7 @@ sub func_doc_send
     my $base_file = join("/",$DOCUMENTS,$cpi_vars::USER,$cpi_vars::FORM{what});
     my $to_send = $base_file.".pdf";
     my @subject = (&dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname") );
-    my @tbl = ( "<html><body><table style='border-collapse:collapse'>" );
+    my @toprint = ("<html><body>",&gen_info_table($to_send),"</body></html>");
     my @msgs;
     my $info_file = $base_file;
     $info_file =~ s/\.(unsigned|signed)$/.info.po/;
@@ -902,41 +861,18 @@ sub func_doc_send
 	    $info{name},
 	    &time_string( $YMDHM, $info{signed} )
 	    );
-	push( @tbl,
-	    "<tr><th valign=top align=left>XL(Document name):</th>",
-		"<td valign=top>",$info{name},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Signing user):</th>",
-		"<td valign=top>",$info{user},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Signed):</th>",
-		"<td valign=top>", &time_string($YMDHM,$info{signed}), "</td></tr><tr>",
-    #	    "<th valign=top align=left>XL(Location on document):</th>",
-    #	    "<td valign=top>",$info{analog_location},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Digital signature):</th>",
-		"<td valign=top>",&filename_to_text($info{digital_signature}),"</td></tr><tr>",
-		"<th valign=top align=left>XL(Agent):</th>",
-		"<td valign=top>",$info{agent},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Agent IP):</th>",
-		"<td valign=top>",$info{remote_addr},"</td></tr><tr>",
-		"<th valign=top align=left>XL(Size in bytes):</th>",
-		"<td valign=top>",$info{size},"</td></tr>" );
         push( @msgs, "XL(Signed) '$info{name}' XL(sent to) $cpi_vars::FORM{destination}" );
 	}
     else
         {
-	push( @tbl,
-	    "<tr><th valign=top align=left>XL(Document name):</th>",
-	        "<td valign=top>",$base_file,"</td></tr>",
-	    "<tr><th valign=top align=left>XL(Uploaded):</th>",
-	        "<td valign=top>",&file_modified($to_send),"</td></tr>" );
 	push( @subject, "uploaded", $to_send,
 	    &time_string( $YMDHM, &file_modified($to_send) ) );
         push( @msgs, "$to_send XL(sent to) $cpi_vars::FORM{destination}" );
 	}
-    push( @tbl, "</table></body></html>" );
     &sendmail( $cpi_vars::DAEMON_EMAIL,
 	$cpi_vars::FORM{destination},
 	join(" ",@subject),
-	&xlate(join("\n",@tbl)),
+	&xlate(join("\n",@toprint)),
 	$to_send );
     &func_docs_show( @msgs );
     }
