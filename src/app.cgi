@@ -471,7 +471,7 @@ sub rescale_and_draw
 sub func_doc_sign
     {
     my $unsigned = "$DOCUMENTS/$cpi_vars::USER/$cpi_vars::FORM{what}.unsigned.pdf";
-    my $doc_as_jpg_b64 = &read_file("$CVT '$unsigned' -.jpeg|tee /usr/local/projects/sign/debug/foo.jpg |base64 -w 0 |");
+    my $doc_as_jpg_b64 = &read_file("$CVT '$unsigned' -.jpeg|base64 -w 0 |");
 
     #my @toprint = ( &app_top() );
     &xprint(
@@ -702,12 +702,14 @@ sub gen_info_table
 	$kuser =~ s/ .*//;
 	my $kbase = $info{digital_signature};
 	$kbase =~ s/\.private\.asc//;
-	my $public_key = join("/",
-	    $KEYS, $kuser, $kbase.".public.asc" );
+	my $public_key = join( "/", $KEYS, $kuser, $kbase.".public.asc" );
+	$cpi_vars::FORM{c} ||= $info{cookie};
 	push( @toprint,
 	    "<input type=hidden name=c value='",$info{cookie},"'>",
 	    "<tr><th valign=top align=left>XL(Document name):</th>",
-		"<td valign=top>",$info{name},"</td></tr>",
+	        "<td valign=top>",
+	         "<a href='$cpi_vars::URL?func=doc_viewanon&c=$info{cookie}'>",
+		&filename_to_text($info{name}),"</a></td></tr>",
 	    "<tr><th valign=top align=left>XL(Signing user):</th>",
 		"<td valign=top>",$info{user},"</td></tr><tr>",
 	    "<tr><th valign=top align=left>XL(Signed):</th>",
@@ -723,11 +725,6 @@ sub gen_info_table
 		( ! -r $public_key
 		? "XL(Public key unavailable here)"
 		: ("<pre>", &read_file($public_key), "</pre>" )), "</td></tr>");
-	push( @toprint,
-	    "<tr><th valign=top colspan=2><input type=button",
-		" onClick='do_submit(\"func\",\"doc_viewanon\");'",
-		" value='XL(View signed document)'></th></tr>\n" )
-	    if( $cpi_vars::FORM{c} );
 	}
     push( @toprint, "</table>" );
     return join("",@toprint);
