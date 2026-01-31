@@ -1,0 +1,29 @@
+<center id='document_id'>
+    Click on document to place your analog signature.<br>
+    <img id=document_image_id src='data:image/png;base64,%%DOCUMENT_JPG%%' width=90% border=1>
+</center>
+
+<span style='display:none' id='signature_id'>
+    <table style='border-collapse:collapse'>
+    <tr id=passphrase_prompt_id><th align=left>XL(Passphrase):</th><td>
+        <input type=text placeholder='XL(%%PASSPHRASE_PLACEHOLDER%%)' name=passphrase>
+    </td></tr>
+    <tr><th colspan=2>XL(Sign here):<br>
+	<center>
+	<svg id="panel_id" width="800" height="250" viewBox="0 0 800 250"
+	    xmlns="http://www.w3.org/2000/svg"
+	    style="margin:.5em;border:1px solid gray;borderRadius:.5em;cursor:crosshair;">
+	  <rect id="rect_id" width="800" height="250" fill="#ffa"/>
+	  <line x1="0" y1="200" x2="800" y2="200"
+	      stroke="#666" stroke-width="1" stroke-dasharray="3"
+	      shape-rendering="crispEdges" pointer-events="none"/>
+	  <path id="pen_id" stroke="navy" stroke-width="2" fill="none"
+	      pointer-events="none"/>
+	</svg>
+	<br>
+	  <button onClick='doneSignature();'>XL(Done)</button>
+	  <button onClick='clearSignature();return false;'>
+	      XL(Clear signature)</button>
+	</center></td></tr>
+    </table>
+</span>
