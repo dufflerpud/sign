@@ -1,24 +1,37 @@
 #!/usr/bin/perl -w
+#
+#indx#	app.cgi - An application for Open-PGP signing a PDF file
 #@HDR@	$Id: app.cgi,v 1.1 2020/08/12 21:17:31 chris Exp chris $
-#@HDR@		Copyright 2026 by
-#@HDR@		Christopher Caldwell/Brightsands
-#@HDR@		P.O. Box 401, Bailey Island, ME 04003
-#@HDR@		All Rights Reserved
 #@HDR@
-#@HDR@	This software comprises unpublished confidential information
-#@HDR@	of Brightsands and may not be used, copied or made available
-#@HDR@	to anyone, except in accordance with the license under which
-#@HDR@	it is furnished.
-#########################################################################
-#	sign.cgi							#
-#		2024-04-18	c.m.caldwell@alumni.unh.edu		#
-#									#
-#	Create routes for drivers for meal delivery service.		#
-#									#
-#	Tested with:							#
-#		Meals-on-wheels						#
-#		Harpswell Aging	at Home					#
-#########################################################################
+#@HDR@	Copyright (c) 2026 Christopher Caldwell (Christopher.M.Caldwell0@gmail.com)
+#@HDR@
+#@HDR@	Permission is hereby granted, free of charge, to any person
+#@HDR@	obtaining a copy of this software and associated documentation
+#@HDR@	files (the "Software"), to deal in the Software without
+#@HDR@	restriction, including without limitation the rights to use,
+#@HDR@	copy, modify, merge, publish, distribute, sublicense, and/or
+#@HDR@	sell copies of the Software, and to permit persons to whom
+#@HDR@	the Software is furnished to do so, subject to the following
+#@HDR@	conditions:
+#@HDR@	
+#@HDR@	The above copyright notice and this permission notice shall be
+#@HDR@	included in all copies or substantial portions of the Software.
+#@HDR@	
+#@HDR@	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+#@HDR@	KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+#@HDR@	WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
+#@HDR@	AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+#@HDR@	HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+#@HDR@	WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+#@HDR@	FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+#@HDR@	OTHER DEALINGS IN THE SOFTWARE.
+#
+#hist#	2026-02-19 - Christopher.M.Caldwell0@gmail.com - Created
+########################################################################
+#doc#	app.cgi - An application for Open-PGP signing a PDF file
+#doc#	Adds user's signature entered through touchpad or mouse along
+#doc#	with QR code to document.
+########################################################################
 
 #########################################################################
 #	Perl startup.							#
@@ -52,6 +65,7 @@ use cpi_hash qw( hashof );
 use cpi_inlist qw( inlist );
 use cpi_template qw( template );
 use cpi_send_file qw( sendmail );
+use cpi_cgi qw( safe_html );
 use cpi_vars;
 
 $cpi_vars::TABLE_TAGS	= "bgcolor=\"#c0c0d0\"";
@@ -105,9 +119,9 @@ my @problems;
 print STDERR "--- "
 	. &time_string($YMDHM,$NOW)
 	. " pid=$$ ---\n";
-print STDERR join("\n    ","Form:",
-	map { "$_=[$cpi_vars::FORM{$_}]" } sort keys %cpi_vars::FORM ), "\n"
-	if( %cpi_vars::FORM );
+#print STDERR join("\n    ","Form:",
+#	map { "$_=[$cpi_vars::FORM{$_}]" } sort keys %cpi_vars::FORM ), "\n"
+#	if( %cpi_vars::FORM );
 
 #########################################################################
 #	Returns file modified string.					#
@@ -174,49 +188,76 @@ EOF
 #########################################################################
 sub handoff
     {
-    if( scalar(@_) != 2 )
-        { &fatal("Incorrect number of arguments for 'handoff'."); }
-    else
-	{
-	my( $destination_user, $file_to_sign ) = @_;
-	&dbread( $cpi_vars::ACCOUNTDB );
-	#my $group = "${cpi_vars::PROG}_user";
-	my $group = "sign_user";
-	push( @problems, "$destination_user is not in group \"$group\"." )
-	    if( ! &in_group( $destination_user, $group ) );
-	my $email = &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "email" );
-	push( @problems, "$destination_user does not have confirmed e-mail address." )
-	    if( ! $email
-	     || ! &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "confirmemail" ) );
-	push( @problems, "$file_to_sign is not readable." )
-	    if( ! -r $file_to_sign );
-	&fatal(@problems) if( @problems );
-	my $docname = $file_to_sign;
-	$docname =~ s+.*/++;
-	$docname =~ s/\.[^\.]*$//;
-	my $destname = "$DOCUMENTS/$destination_user/$docname.unsigned.pdf";
-	my $doctextname = &filename_to_text($docname);
-	&fatal("$destname already exists.") if( -e $destname );
-	if( $file_to_sign =~ /\.pdf$/ )
-	    { &echodo("cp '$file_to_sign' '$destname'"); }
+    my( $destination_user, $file_to_sign, $mailto );
+    &dbread( $cpi_vars::ACCOUNTDB );
+    my $group = "sign_user";
+    my %info;
+
+    foreach my $arg ( @_ )
+        {
+	if( $arg =~ /@/ )
+	    {
+	    push( @problems, "E-mail address specified multiple times." )
+	        if( $info{mailto} );
+	    $info{mailto} = $arg;
+	    }
+	elsif( -r $arg )
+	    {
+	    push( @problems, "File specified multiple times." )
+	        if( $file_to_sign );
+	    $file_to_sign = $arg;
+	    }
+	elsif( &in_group( $arg, $group ) )
+	    {
+	    push( @problems, "Sign user specified multiple times." )
+		if( $destination_user );
+	    $destination_user = $arg;
+	    }
 	else
-	    { &echodo("$CVT -v1 '$file_to_sign' '$destname'"); }
-	&fatal("Could not make $destname from $file_to_sign.")
-	    if( ! -s $destname );
-	$cpi_vars::USER ||= $ENV{LOGNAME};
-	$cpi_vars::URL ||= "https://www.$cpi_vars::DOMAIN$cpi_vars::OFFSET/$cpi_vars::PROG";
-	my $subject =
-	    "\"$doctextname\" received from "
-	    . &dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname")
-	    . " for signature.";
-	print "E-mail from $cpi_vars::DAEMON_EMAIL to [$email]:  $subject\n";
-	&sendmail( $cpi_vars::DAEMON_EMAIL,
-	    $email,
-	    $subject,
-	    "<html><head></head><body><h2>Click <a href='$cpi_vars::URL'>here</a> to sign \"$doctextname\" document.</h2></body></html>",
-	    $destname );
-	&cleanup(0);
+	    {
+	    push( @problems, "Unknown argument [$arg]." );
+	    }
 	}
+
+    push( @problems, "No file specified." ) if( ! $file_to_sign );
+    push( @problems, "No user specified." ) if( ! $destination_user );
+    &fatal( @problems ) if( @problems );
+
+    my $email = &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "email" );
+    push( @problems, "$destination_user does not have confirmed e-mail address." )
+	if( ! $email
+	 || ! &dbget( $cpi_vars::ACCOUNTDB, "users", $destination_user, "confirmemail" ) );
+    &fatal(@problems) if( @problems );
+    my $docname = $file_to_sign;
+    $docname =~ s+.*/++;
+    $docname =~ s/\.[^\.]*$//;
+    my $base = "$DOCUMENTS/$destination_user/$docname";
+    my $destname = "$base.unsigned.pdf";
+    my $info_file = "$base.info.po";
+    my $doctextname = &filename_to_text($docname);
+    &fatal("$destname already exists.") if( -e $destname );
+    if( $file_to_sign =~ /\.pdf$/ )
+	{ &echodo("cp '$file_to_sign' '$destname'"); }
+    else
+	{ &echodo("$CVT -v1 '$file_to_sign' '$destname'"); }
+    &fatal("Could not make $destname from $file_to_sign.")
+	if( ! -s $destname );
+    &write_file( $info_file,
+	Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
+    chmod( 0666, $info_file );
+    $cpi_vars::USER ||= $ENV{LOGNAME};
+    $cpi_vars::URL ||= "https://www.$cpi_vars::DOMAIN$cpi_vars::OFFSET/$cpi_vars::PROG";
+    my $subject =
+	"\"$doctextname\" received from "
+	. &dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname")
+	. " for signature.";
+    print "E-mail from $cpi_vars::DAEMON_EMAIL to [$email]:  $subject\n";
+    &sendmail( $cpi_vars::DAEMON_EMAIL,
+	$email,
+	$subject,
+	"<html><head></head><body><h2>Click <a href='$cpi_vars::URL'>here</a> to sign \"$doctextname\" document.</h2></body></html>",
+	$destname );
+    &cleanup(0);
     }
 
 #########################################################################
@@ -317,9 +358,9 @@ sub func_docs_show
 	    {
 	    my $info_file="$directory/$base.info.po";
 	    my $signed_datetime;
+	    my %info;
 	    if( -r $info_file )
 		{
-		my %info;
 		eval( &read_file( $info_file ) );
 		$signed_datetime =
 		    &time_string($YMDHM,$info{signed});
@@ -330,12 +371,13 @@ sub func_docs_show
 	        {
 		push( @toprint, "<th>" );
 		my $fname = "$directory/$base.$ftype.pdf";
+		my $maildest = $info{mailto} || "";
 		if( -r $fname )
 		    {
 		    my $modified = &file_modified($fname);
 		    push( @toprint,
 			"<select onChange='",
-			"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\",\"destination\",prompt(\"XL(Send file to what address?)\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete $ftype) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\");}this.selectedIndex=0;'>",
+			"if(this.value==\"doc_send\"){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\",\"destination\",prompt(\"XL(Send file to what address?)\",\"$maildest\"));} else if(this.value!=\"doc_del\"||confirm(\"XL(Are you sure you want to delete $ftype) $base?\")){do_submit(\"func\",this.value,\"what\",\"$base.$ftype\");}this.selectedIndex=0;'>",
 			"<option disabled selected>$modified</option>");
 		    foreach my $buttext (
 			"doc_info:Information",
@@ -499,12 +541,15 @@ sub func_doc_upload_unsigned
     my $unsigned	= "$DOCUMENTS/$cpi_vars::USER/$name.unsigned.pdf";
 
     if( $cpi_vars::FORM{new_contents} =~ /^%PDF/ )
-	{ &write_file( $unsigned, $cpi_vars::FORM{new_contents} ); }
+	{
+	print STDERR "Uploading PDF file into $unsigned.\n";
+	&write_file( $unsigned, $cpi_vars::FORM{new_contents} );
+	}
     else
         {
 	my $uploading = &tempfile(".unknown");
 	&write_file( $uploading, $cpi_vars::FORM{new_contents} );
-	&echodo("$CVT '$unsigned' < '$uploading'");
+	&echodo("$CVT -v1 '$unsigned' < '$uploading'");
 	}
     if( ! $cpi_vars::FORM{digital_signature} )
         { &func_docs_show("$unsigned uploaded."); }
@@ -647,26 +692,35 @@ sub func_doc_signed
 	    "XL(Signature failure, probably due to passphrase mismatch.)"); }
     else
 	{
-	my %info =
-	    (
-	    name		=> $name,
-	    user		=> $cpi_vars::USER." ("
-				    .	&dbget($cpi_vars::ACCOUNTDB,
-					"users",$cpi_vars::USER,"fullname")
-				    . ")",
-	    signed		=> $NOW,
-	    digital_signature	=> $cpi_vars::FORM{digital_signature},
-	    size		=> -s $signed,
-	    agent		=> $ENV{HTTP_USER_AGENT},
-	    remote_addr		=> $ENV{REMOTE_ADDR},
-	    analog_location	=> join(",",$colpct,$rowpct),
-	    cookie		=> $cookie
-	    );
+	my %info;
+	eval( &read_file( $info_file ) ) if( -r $info_file );
+	$info{name}			= $name;
+	$info{user}			= $cpi_vars::USER." ("
+					    .	&dbget($cpi_vars::ACCOUNTDB,
+						"users",$cpi_vars::USER,"fullname")
+					    . ")";
+	$info{signed}			= $NOW;
+	$info{digital_signature}	= $cpi_vars::FORM{digital_signature};
+	$info{size}			= -s $signed;
+	$info{agent}			= $ENV{HTTP_USER_AGENT};
+	$info{remote_addr}		= $ENV{REMOTE_ADDR};
+	$info{analog_location}		= join(",",$colpct,$rowpct);
+	$info{cookie}			= $cookie;
 	&write_file( $info_file,
 	    Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
 	push( @msgs, "$unsigned uploaded");
 	}
     &func_docs_show(@msgs);
+    }
+
+#########################################################################
+#	Return the output of an attempt at verifying the digital	#
+#	signature of a file.						#
+#########################################################################
+sub verify
+    {
+    my @ret = &read_lines("gpg --quiet --lock-never --batch --homedir /tmp --keyserver-options auto-key-retrieve --no-auto-check-trustdb --verify $_[0] 2>&1 |");
+    return join("\n",grep(! /with a trusted/, grep(! /no indication/, @ret )));
     }
 
 #########################################################################
@@ -720,11 +774,20 @@ sub gen_info_table
 		"<td valign=top>",$info{remote_addr},"</td></tr>",
 	    "<tr><th valign=top align=left>XL(Size in bytes):</th>",
 		"<td valign=top>",$info{size},"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Send signed document to):</th>",
+		"<td valign=top>",$info{mailto}||"","</td></tr>",
 	    "<tr><th valign=top align=left>XL(Digital signature):</th>",
 		"<td valign=top>",&filename_to_text($kbase),"<br>",
 		( ! -r $public_key
 		? "XL(Public key unavailable here)"
-		: ("<pre>", &read_file($public_key), "</pre>" )), "</td></tr>");
+		: ("<pre>", &read_file($public_key), "</pre>" )),
+		"</td></tr>",
+	    "<tr><th valign=top align=left>XL(Verification):</th>",
+		"<td>",
+		( ! -r $fnames{signed} )
+		? "XL(No verification possible)"
+		: ("<pre>", &safe_html(&verify($fnames{signed})), "</pre>"),
+		"</td></tr>");
 	}
     push( @toprint, "</table>" );
     return join("",@toprint);
