@@ -16,8 +16,8 @@ test:		$(RESDIR)/.must_exist
 		$(BINDIR)/* < tests/1 > $(RESDIR)/1
 
 install:
-		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/documents
-		$(INSTALL) -d -m 777 -o root -g root $(PROJECTDIR)/keys
+		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/documents
+		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/keys
 		$(MAKE) std_$@ ORIGINAL_TARGET=$@
 
 fresh:
