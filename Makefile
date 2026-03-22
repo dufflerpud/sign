@@ -22,7 +22,7 @@ install:
 
 fresh:
 		$(GIT) pull
-		@make install
+		@$(MAKE) install
 
 %:
 		@echo "Invoking std_$@ rule:"
