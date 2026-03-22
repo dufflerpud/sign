@@ -18,7 +18,7 @@ test:		$(RESDIR)/.must_exist
 install:
 		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/documents
 		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/keys
-		$(MAKE) std_$@ ORIGINAL_TARGET=$@
+		$(MAKE) ORIGINAL_TARGET=$@ std_$@
 
 fresh:
 		$(GIT) pull
@@ -26,4 +26,4 @@ fresh:
 
 %:
 		@echo "Invoking std_$@ rule:"
-		@$(MAKE) std_$@ ORIGINAL_TARGET=$@
+		@$(MAKE) ORIGINAL_TARGET=$@ std_$@
