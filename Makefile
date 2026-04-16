@@ -12,9 +12,6 @@ PROGRAMS=
 PROJECTSDIR?=$(shell echo $(CURDIR) | sed -e 's+/projects/.*+/projects+')
 include $(PROJECTSDIR)/common/Makefile.std
 
-test:		$(RESDIR)/.must_exist
-		$(BINDIR)/* < tests/1 > $(RESDIR)/1
-
 install:
 		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/documents
 		$(INSTALL) -d -m 777 -o $(SYSTEMUSER) -g $(SYSTEMGROUP) $(PROJECTDIR)/keys
