@@ -246,7 +246,6 @@ sub handoff
 	Data::Dumper->Dump( [ \%info ], [ qw(*info) ] ) );
     chmod( 0666, $info_file );
     $cpi_vars::USER ||= $ENV{LOGNAME};
-    $cpi_vars::URL ||= "https://www.$cpi_vars::DOMAIN$cpi_vars::WEBOFFSET/$cpi_vars::PROG";
     my $subject =
 	"\"$doctextname\" received from "
 	. &dbget($cpi_vars::ACCOUNTDB,"users",$cpi_vars::USER,"fullname")
